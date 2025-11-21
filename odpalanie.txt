@@ -1,0 +1,3 @@
+npm run dev
+i działa pod adresem http://localhost:3000
+api jest wysylane na http://localhost:3000/api/hello

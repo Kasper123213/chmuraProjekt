@@ -6,6 +6,9 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "@azure/storage-blob": "^12.29.1",
+    "dotenv": "^17.2.3",
+    "express": "^4.22.1",
+    "multer": "^2.0.2"
   }
 }

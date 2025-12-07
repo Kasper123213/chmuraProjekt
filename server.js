@@ -25,7 +25,7 @@ const model = genAI.getGenerativeModel({
 });
 
 // Funkcja do opisania obrazów przez Google AI
-async function describeImages(files) {
+async function describeImages(files, short) {
   const inputs = [];
 
   for (const file of files) {
@@ -36,14 +36,82 @@ async function describeImages(files) {
       },
     });
   }
+  let prompt = '';
+  if (short){
+    prompt = `
+Otrzymasz 3 zdjęcia z kamer monitoringu mojej posesji.
 
+Każde kolejne zdjęcie jest wykonane później:
+- Zdjęcie 1: kamera przy bramie
+- Zdjęcie 2: kamera na podjeździe
+- Zdjęcie 3: kamera przy drzwiach wejściowych
+
+Twoje zadanie:
+1. Przeanalizuj zdjęcia w kolejności chronologicznej.
+2. Napisz, co mogło się wydarzyć — jaka jest możliwa historia.
+3. Użyj tylko najważniejszych informacji widocznych na zdjęciach.
+4. Styl: neutralny, rzeczowy.
+5. Maksymalnie **50 słów**.
+
+Zwróć odpowiedź TYLKO jako krótką historyjkę, bez punktów i bez komentarzy technicznych.
+    `;
+    } else{
+      prompt = `
+Masz trzy zdjęcia z kamer monitoringu na mojej posesji:
+
+- Zdjęcie 1: Kamera przy bramie
+- Zdjęcie 2: Kamera kilka metrów dalej na podjeździe
+- Zdjęcie 3: Kamera pod drzwiami wejściowymi
+
+Każde zdjęcie pokazuje moment wykrycia ruchu. Opisz dokładnie, co mogło się wydarzyć między tymi trzema punktami. Uwzględnij kolejność ruchu osoby, możliwe intencje i działania. Nie zgaduj imion ani szczegółów prywatnych – skup się tylko na tym, co widać na obrazach. 
+Zwróć odpowiedź w formie krótkiego, logicznego opisu wydarzenia.
+
+    `;
+  }
   const result = await model.generateContent([
-    { text: "Opisz szczegółowo każdy z obrazów osobno." },
+    { text: prompt},
     ...inputs
   ]);
 
   return result.response.text();
 }
+
+
+async function uploadFilesToAzure(files, containerClient, aiDescriptions_short, aiDescriptions_long) {
+  if (!files || files.length === 0) return [];
+
+  const uploadedFiles = [];
+
+  for (const file of files) {
+    const baseName = file.originalname.replace(/\.[^/.]+$/, "");
+    const blobName = `${Date.now()}-${baseName}.json`;
+    // const blobName = Date.now() + '-' + file.originalname + '.json'; // końcówka .json
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+    // Tworzymy JSON z metadanymi i base64 pliku
+    const fileData = {
+      originalName: file.originalname,
+      uploadDate: new Date().toISOString(),
+      mimeType: file.mimetype,
+      size: file.size,
+      aiDescription_short: aiDescriptions_short,
+      aiDescription_long: aiDescriptions_long,
+      content: file.buffer.toString('base64') // zapisujemy zawartość pliku jako base64
+    };
+
+    const jsonString = JSON.stringify(fileData);
+
+    await blockBlobClient.upload(jsonString, Buffer.byteLength(jsonString), {
+      blobHTTPHeaders: { blobContentType: "application/json" }
+    });
+
+    uploadedFiles.push(blobName);
+  }
+
+  return uploadedFiles;
+}
+
+
 
 // Test endpoint
 app.get('/', (req, res) => {
@@ -51,35 +119,99 @@ app.get('/', (req, res) => {
 });
 
 // Endpoint upload
-app.post('/upload', upload.array('files', 3), async (req, res) => {
+app.post('/api/upload', upload.array('files', 3), async (req, res) => {
+  let aiDescriptions_short, aiDescriptions_long;
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
-    }
-
-    // Upload plików do Azure Blob Storage
-    const uploadedFiles = [];
-    for (const file of req.files) {
-      const blobName = Date.now() + '-' + file.originalname;
-      const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-      await blockBlobClient.upload(file.buffer, file.size);
-      uploadedFiles.push(blobName);
-    }
+    };
 
     // Opis zdjęć przez Google AI
-    const aiDescriptions = await describeImages(req.files);
+    aiDescriptions_short = await describeImages(req.files, true);
+    aiDescriptions_long = await describeImages(req.files, false);
+
+    if (!aiDescriptions_short || !aiDescriptions_long) {
+      throw new Error("AI descriptions undefined");
+    }
+  } catch (err) {
+    console.error("AI description error:", err);
+    return res.status(500).json({ error: "Generative AI description failed" });
+    ;
+  }
+  try{
+    // // Upload plików do Azure Blob Storage
+    const uploadedFiles = await uploadFilesToAzure(req.files, containerClient, aiDescriptions_short, aiDescriptions_long);
 
     res.json({
       message: "Files uploaded",
       files: uploadedFiles,
-      aiDescriptions
+      aiDescriptions_short,
+      aiDescriptions_long
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Upload failed" });
+    console.error("Upload error:", err);
+    res.status(500).json({ error: "Upload failed", details: err.message });
   }
 });
+
+
+
+async function getFilesBetweenDates(containerClient, startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  const result = [];
+
+  // Pobieramy metadane wszystkich blobów
+  for await (const blob of containerClient.listBlobsFlat()) {
+    
+    try {
+      const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
+      const downloadResp = await blockBlobClient.download(0);
+
+      const text = await streamToString(downloadResp.readableStreamBody);
+
+      const json = JSON.parse(text);
+
+      const uploadDate = new Date(json.uploadDate);
+    
+      if (uploadDate >= start && uploadDate <= end) {
+        result.push(json);
+      }
+    } catch (err) {
+      console.error("Błąd przy odczycie blobu:", blob.name, err);
+    }
+  }
+  return result;
+}
+
+// Konwersja stream → string
+function streamToString(readableStream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    readableStream.on("data", (data) => chunks.push(data.toString()));
+    readableStream.on("end", () => resolve(chunks.join("")));
+    readableStream.on("error", reject);
+  });
+}
+app.get("/api/files", async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) return res.status(400).json({ error: "Missing 'from' or 'to'" });
+
+    const files = await getFilesBetweenDates(containerClient, from, to);
+    res.json({ count: files.length, files });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message }); // zawsze JSON
+  }
+});
+
+
+
+
+
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);

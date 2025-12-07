@@ -1,1 +1,8 @@
 .env
+todeploy.zip
+node_modules
+workflow
+python/__pycache__/
+python/env
+python/downloaded_images
+python/images

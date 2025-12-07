@@ -7,7 +7,7 @@ from datetime import datetime
 
 # API z plikami w określonym przedziale dat
 # url = "http://localhost:3000/api/files?from=2025-12-01&to=2025-12-08"
-url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/files?from=2025-12-01&to=2025-12-08"
+url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/files?from=2025-12-01&to=2025-12-09"
 
 response = requests.get(url)
 print("Status code:", response.status_code)

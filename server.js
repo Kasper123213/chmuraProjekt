@@ -24,21 +24,8 @@ const model = genAI.getGenerativeModel({
   model: "gemini-2.0-flash",
 });
 
-// Funkcja do opisania obrazów przez Google AI
-async function describeImages(files, short) {
-  const inputs = [];
 
-  for (const file of files) {
-    inputs.push({
-      inlineData: {
-        mimeType: file.mimetype,
-        data: file.buffer.toString("base64"),
-      },
-    });
-  }
-  let prompt = '';
-  if (short){
-    prompt = `
+const promptShort = `
 Otrzymasz 3 zdjęcia z kamer monitoringu mojej posesji.
 
 Każde kolejne zdjęcie jest wykonane później:
@@ -54,9 +41,9 @@ Twoje zadanie:
 5. Maksymalnie **50 słów**.
 
 Zwróć odpowiedź TYLKO jako krótką historyjkę, bez punktów i bez komentarzy technicznych.
-    `;
-    } else{
-      prompt = `
+`;
+
+const promptLong = `
 Masz trzy zdjęcia z kamer monitoringu na mojej posesji:
 
 - Zdjęcie 1: Kamera przy bramie
@@ -66,15 +53,88 @@ Masz trzy zdjęcia z kamer monitoringu na mojej posesji:
 Każde zdjęcie pokazuje moment wykrycia ruchu. Opisz dokładnie, co mogło się wydarzyć między tymi trzema punktami. Uwzględnij kolejność ruchu osoby, możliwe intencje i działania. Nie zgaduj imion ani szczegółów prywatnych – skup się tylko na tym, co widać na obrazach. 
 Zwróć odpowiedź w formie krótkiego, logicznego opisu wydarzenia.
 
-    `;
+`;
+
+
+// Funkcja do opisania obrazów przez Google AI
+async function describeImages(files, short) {
+  const inputs = [];
+
+  for (const file of files) {
+    inputs.push({
+      inlineData: {
+        mimeType: file.mimetype,
+        data: file.buffer.toString("base64"),
+      },
+    });
   }
-  const result = await model.generateContent([
-    { text: prompt},
-    ...inputs
-  ]);
+  let prompt = '';
+  if (short){
+    prompt = promptShort;
+    } else{
+      prompt = promptLong;
+  }
+  try{
+    const result = await model.generateContent([
+      { text: prompt},
+      ...inputs
+    ]);
+  } catch (err){
+    console.error("\n\n\nGoogle AI error, retrying with OpenRouter...\n\n\n", err);
+    return describeImages2(files, short);
+  }
 
   return result.response.text();
 }
+
+
+// Funkcja opisująca obrazy przez OpenRouter AI
+async function describeImages2(files, short) {
+  const inputs = [];
+
+  for (const file of files) {
+    inputs.push({
+      type: "input_image",
+      image: file.buffer.toString("base64"),
+      mime_type: file.mimetype,
+    });
+  }
+
+  let prompt = "";
+  if (short) {
+    prompt = promptShort;
+  } else {
+    prompt = promptLong;
+  }
+
+  const body = {
+    model: "openai/gpt-4o-mini", 
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: inputs }
+    ]
+  };
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "HTTP-Referer": "https://twoja-domena.com",
+      "X-Title": "MonitoringAI",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error("OpenRouter API error: " + errorText);
+  }
+
+  return data.choices[0].message.content;
+}
+
 
 
 async function uploadFilesToAzure(files, containerClient, aiDescriptions_short, aiDescriptions_long) {
@@ -120,7 +180,9 @@ app.get('/', (req, res) => {
 
 // Endpoint upload
 app.post('/api/upload', upload.array('files', 3), async (req, res) => {
-  let aiDescriptions_short, aiDescriptions_long;
+  let aiDescriptions_short, aiDescriptions_long = "";
+
+
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
@@ -135,9 +197,14 @@ app.post('/api/upload', upload.array('files', 3), async (req, res) => {
     }
   } catch (err) {
     console.error("AI description error:", err);
-    return res.status(500).json({ error: "Generative AI description failed" });
-    ;
+    
+    aiDescriptions_short = ["AI unavailable"];
+    aiDescriptions_long = ["AI unavailable"];
   }
+
+
+
+
   try{
     // // Upload plików do Azure Blob Storage
     const uploadedFiles = await uploadFilesToAzure(req.files, containerClient, aiDescriptions_short, aiDescriptions_long);

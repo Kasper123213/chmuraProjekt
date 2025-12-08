@@ -1,10 +1,8 @@
-require('dotenv').config();
-
 const express = require('express');
 const multer = require('multer');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { BlobServiceClient } = require('@azure/storage-blob');
-const genai = require('@google/generative-ai'); // zakładam, że masz zainstalowane google-generative-ai
+const genai = require('@google/generative-ai'); 
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -38,7 +36,8 @@ Twoje zadanie:
 2. Napisz, co mogło się wydarzyć — jaka jest możliwa historia.
 3. Użyj tylko najważniejszych informacji widocznych na zdjęciach.
 4. Styl: neutralny, rzeczowy.
-5. Maksymalnie **50 słów**.
+5. Maksymalnie **150 znaków**.
+6. Używaj wyłącznie znaków ASCII bez nowych linii i Polskich znaków.
 
 Zwróć odpowiedź TYLKO jako krótką historyjkę, bez punktów i bez komentarzy technicznych.
 `;
@@ -52,7 +51,7 @@ Masz trzy zdjęcia z kamer monitoringu na mojej posesji:
 
 Każde zdjęcie pokazuje moment wykrycia ruchu. Opisz dokładnie, co mogło się wydarzyć między tymi trzema punktami. Uwzględnij kolejność ruchu osoby, możliwe intencje i działania. Nie zgaduj imion ani szczegółów prywatnych – skup się tylko na tym, co widać na obrazach. 
 Zwróć odpowiedź w formie krótkiego, logicznego opisu wydarzenia.
-
+Używaj wyłącznie znaków ASCII bez nowych linii i Polskich znaków.
 `;
 
 
@@ -136,40 +135,49 @@ async function describeImages2(files, short) {
 }
 
 
+function sanitizeMetadata(value) {
+  if (!value) return "";
+  // usuwa znaki nowej linii i powroty karetki
+  let sanitized = value.replace(/[\r\n]+/g, " ");
+  // usuwa znaki nie-ASCII
+  sanitized = sanitized.replace(/[^\x20-\x7E]/g, "");
+  return sanitized;
+}
 
-async function uploadFilesToAzure(files, containerClient, aiDescriptions_short, aiDescriptions_long) {
-  if (!files || files.length === 0) return [];
+
+// Funkcja do uploadu plików do Azure z metadanymi
+async function uploadFilesToAzure(files, containerClient, aiDescriptions_short, aiDescriptions_long, batchID) {
 
   const uploadedFiles = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
 
-  for (const file of files) {
-    const baseName = file.originalname.replace(/\.[^/.]+$/, "");
-    const blobName = `${Date.now()}-${baseName}.json`;
-    // const blobName = Date.now() + '-' + file.originalname + '.json'; // końcówka .json
+    // Tworzymy unikalną nazwę pliku
+    const blobName = `${batchID}_${i}.jpg`;
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
 
-    // Tworzymy JSON z metadanymi i base64 pliku
-    const fileData = {
-      originalName: file.originalname,
-      uploadDate: new Date().toISOString(),
-      mimeType: file.mimetype,
-      size: file.size,
-      aiDescription_short: aiDescriptions_short,
-      aiDescription_long: aiDescriptions_long,
-      content: file.buffer.toString('base64') // zapisujemy zawartość pliku jako base64
+    // Metadane dla Azure Blob Storage
+    const metadata = i===2?{
+      batchID: batchID,
+      aiDescriptions_short: sanitizeMetadata(aiDescriptions_short),
+      aiDescriptions_long: sanitizeMetadata(aiDescriptions_long)
+    }:{
+      batchID: batchID
     };
 
-    const jsonString = JSON.stringify(fileData);
+    // Upload pliku JPG z metadanymi, bez JSON w treści
+    await blockBlobClient.upload(file.buffer, file.size, { metadata });
 
-    await blockBlobClient.upload(jsonString, Buffer.byteLength(jsonString), {
-      blobHTTPHeaders: { blobContentType: "application/json" }
+    uploadedFiles.push({
+      fileName: blobName,
+      url: blockBlobClient.url,
+      metadata
     });
-
-    uploadedFiles.push(blobName);
   }
 
   return uploadedFiles;
 }
+
 
 
 
@@ -180,13 +188,12 @@ app.get('/', (req, res) => {
 
 // Endpoint upload
 app.post('/api/upload', upload.array('files', 3), async (req, res) => {
-  let aiDescriptions_short, aiDescriptions_long = "";
-
-
+  let aiDescriptions_short = [], aiDescriptions_long = [];
+  const batchID = req.body.batchID || "unknown_batch";
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
-    };
+    }
 
     // Opis zdjęć przez Google AI
     aiDescriptions_short = await describeImages(req.files, true);
@@ -197,17 +204,18 @@ app.post('/api/upload', upload.array('files', 3), async (req, res) => {
     }
   } catch (err) {
     console.error("AI description error:", err);
-    
     aiDescriptions_short = ["AI unavailable"];
     aiDescriptions_long = ["AI unavailable"];
   }
 
-
-
-
-  try{
-    // // Upload plików do Azure Blob Storage
-    const uploadedFiles = await uploadFilesToAzure(req.files, containerClient, aiDescriptions_short, aiDescriptions_long);
+  try {
+    const uploadedFiles = await uploadFilesToAzure(
+      req.files,
+      containerClient,
+      aiDescriptions_short,
+      aiDescriptions_long,
+      batchID
+    );
 
     res.json({
       message: "Files uploaded",
@@ -223,57 +231,44 @@ app.post('/api/upload', upload.array('files', 3), async (req, res) => {
 });
 
 
-
-async function getFilesBetweenDates(containerClient, startDate, endDate) {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-
+// Pobranie wszystkich plików wraz z metadanymi
+async function getAllFilesWithMetadata(containerClient) {
   const result = [];
 
-  // Pobieramy metadane wszystkich blobów
   for await (const blob of containerClient.listBlobsFlat()) {
-    
     try {
       const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
-      const downloadResp = await blockBlobClient.download(0);
+      
+      // Pobieramy właściwości blobu (metadata, contentType, size itp.)
+      const properties = await blockBlobClient.getProperties();
 
-      const text = await streamToString(downloadResp.readableStreamBody);
+      result.push({
+        fileName: blob.name,
+        url: blockBlobClient.url,
+        size: properties.contentLength,
+        contentType: properties.contentType,
+        metadata: properties.metadata
+      });
 
-      const json = JSON.parse(text);
-
-      const uploadDate = new Date(json.uploadDate);
-    
-      if (uploadDate >= start && uploadDate <= end) {
-        result.push(json);
-      }
     } catch (err) {
-      console.error("Błąd przy odczycie blobu:", blob.name, err);
+      console.error("Błąd przy pobieraniu metadanych blobu:", blob.name, err);
     }
   }
+
   return result;
 }
 
-// Konwersja stream → string
-function streamToString(readableStream) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    readableStream.on("data", (data) => chunks.push(data.toString()));
-    readableStream.on("end", () => resolve(chunks.join("")));
-    readableStream.on("error", reject);
-  });
-}
+// Endpoint
 app.get("/api/files", async (req, res) => {
   try {
-    const { from, to } = req.query;
-    if (!from || !to) return res.status(400).json({ error: "Missing 'from' or 'to'" });
-
-    const files = await getFilesBetweenDates(containerClient, from, to);
+    const files = await getAllFilesWithMetadata(containerClient);
     res.json({ count: files.length, files });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message }); // zawsze JSON
+    res.status(500).json({ error: err.message });
   }
 });
+
 
 
 

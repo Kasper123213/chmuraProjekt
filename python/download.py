@@ -1,63 +1,75 @@
-
-import requests
-import base64
-from pathlib import Path
+import os
 import json
-from datetime import datetime
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
 
-# API z plikami w określonym przedziale dat
-# url = "http://localhost:3000/api/files?from=2025-12-01&to=2025-12-08"
-url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/files?from=2025-12-01&to=2025-12-09"
+# url = "http://localhost:3000/api/files"
+url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/files"
 
+
+# --- Wczytanie zmiennych środowiskowych ---
+# Ścieżka do .env w folderze wyżej
+dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(dotenv_path)
+CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")  # connection string z .env
+
+if not CONNECTION_STRING:
+    raise ValueError("Brak CONNECTION_STRING w .env")
+
+# --- Połączenie z Azure ---
+blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+
+# --- Pobranie JSON z lokalnego endpointu ---
+import requests
 response = requests.get(url)
-print("Status code:", response.status_code)
-print("Response text:", response.text[:1000])
+data = response.json()
+files = data["files"]
+base_folder = "downloaded_images"
+os.makedirs(base_folder, exist_ok=True)
 
-try:
-    data = response.json()
-except Exception as e:
-    print("Błąd parsowania JSON:", e)
-    exit(1)
+# --- Grupowanie po batchID ---
+batches = {}
+for file in files:
+    batchid = file["metadata"].get("batchid", "unknown_batch")
+    if batchid not in batches:
+        batches[batchid] = []
+    batches[batchid].append(file)
 
-files = data.get("files", [])
-print(f"Znaleziono plików: {len(files)}")
+# --- Pobieranie plików i tworzenie folderów ---
+for batchid, files_in_batch in batches.items():
+    os.makedirs(os.path.join(base_folder, batchid), exist_ok=True)
+    metadata_lines = []
 
-output_dir = Path("downloaded_images")
-output_dir.mkdir(exist_ok=True)
+    for file in files_in_batch:
+        file_name = file["fileName"]
+        metadata = file["metadata"]
 
-for f in files:
-    name = f.get("originalName", "unknown")
-    content_base64 = f.get("content")
-    upload_date = f.get("uploadDate")
-    
-    if content_base64 and upload_date:
-        # Dekodowanie base64 i zapis obrazu
-        content_bytes = base64.b64decode(content_base64)
-        ext = name.split(".")[-1] if "." in name else "jpg"
-        
-        # Folder po dacie i godzinie (YYYY-MM-DD_HH-MM-SS)
-        dt = datetime.fromisoformat(upload_date)
-        date_time_str = dt.strftime("%Y-%m-%d_%H-%M-%S")
-        folder_name = output_dir / date_time_str
-        folder_name.mkdir(exist_ok=True)
-        
-        # Zapis obrazu
-        img_file_path = folder_name / name
-        with open(img_file_path, "wb") as img_file:
-            img_file.write(content_bytes)
-        
-        # Zapis informacji do pliku txt
-        metadata = {
-            "uploadDate": upload_date,
-            "mimeType": f.get("mimeType"),
-            "size": f.get("size"),
-            "aiDescription_short": f.get("aiDescription_short"),
-            "aiDescription_long": f.get("aiDescription_long"),
-        }
-        txt_file_path = folder_name / f"{Path(name).stem}.txt"
-        with open(txt_file_path, "w", encoding="utf-8") as txt_file:
-            json.dump(metadata, txt_file, ensure_ascii=False, indent=2)
-        
-        print(f"Zapisano plik i metadane w folderze: {folder_name}")
-    else:
-        print(f"Brak zawartości lub daty w pliku: {name}")
+        # Wyciągamy container i blob name z URL
+        url_parts = file["url"].split("/")
+        container_name = url_parts[3]  # trzeci element po https://<account>.blob.core.windows.net/
+        blob_name = "/".join(url_parts[4:])
+
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+
+        print(f"Pobieranie {file_name} do folderu {os.path.join(base_folder, batchid)}...")
+
+        try:
+            download_stream = blob_client.download_blob()
+            file_path = os.path.join(os.path.join(base_folder, batchid), file_name)
+            with open(file_path, "wb") as f:
+                f.write(download_stream.readall())
+        except Exception as e:
+            print(f"Nie udało się pobrać {file_name}: {e}")
+            continue
+
+        # Tworzymy linię metadanych (bez batchid bo już folder)
+        meta_copy = metadata.copy()
+        meta_copy.pop("batchid", None)
+        metadata_lines.append(f"{file_name}: {json.dumps(meta_copy)}")
+
+    # Zapis metadanych do pliku metadata.txt w folderze
+    metadata_path = os.path.join(os.path.join(base_folder, batchid), "metadata.txt")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(metadata_lines))
+
+print("Pobieranie zakończone.")

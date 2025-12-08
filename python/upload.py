@@ -5,6 +5,10 @@ import requests
 # url = "http://localhost:3000/api/upload"
 url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/upload"
 
+
+data = {
+    "batchID": "ID0019"
+}
 # Ścieżki do plików
 file_paths = [
     r"images/1_1.jpeg",
@@ -20,7 +24,7 @@ files = [
 ]
 
 # Wysłanie żądania POST
-response = requests.post(url, files=files)
+response = requests.post(url, files=files, data=data)
 
 # Zamknięcie otwartych plików
 for _, (_, f, _) in files:

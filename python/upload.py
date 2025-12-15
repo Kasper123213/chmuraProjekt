@@ -2,8 +2,8 @@
 import requests
 
 # Adres lokalnego serwera lub Azure
-# url = "http://localhost:3000/api/upload"
-url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/upload"
+url = "http://localhost:3000/api/upload"
+# url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/upload"
 
 
 data = {

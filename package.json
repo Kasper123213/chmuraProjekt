@@ -8,6 +8,7 @@
   "dependencies": {
     "@azure/storage-blob": "^12.29.1",
     "@google/generative-ai": "^0.24.1",
+    "dotenv": "^17.2.3",
     "express": "^4.22.1",
     "multer": "^2.0.2"
   }

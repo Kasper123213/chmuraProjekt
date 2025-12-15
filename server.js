@@ -1,3 +1,6 @@
+require('dotenv').config();
+
+
 const express = require('express');
 const multer = require('multer');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -9,6 +12,7 @@ const port = process.env.PORT || 3000;
 // Konfiguracja multer do odbierania plików w pamięci
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
+const path = require('path');
 
 // Azure Blob Storage setup
 const AZURE_STORAGE_CONNECTION_STRING = process.env.AZURE_STORAGE_CONNECTION_STRING;
@@ -152,8 +156,10 @@ async function uploadFilesToAzure(files, containerClient, aiDescriptions_short, 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
 
+    const ext = path.extname(file.originalname);
+
     // Tworzymy unikalną nazwę pliku
-    const blobName = `${batchID}_${i}.jpg`;
+    const blobName = `${batchID}_${i}${ext}`;
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
 
     // Metadane dla Azure Blob Storage

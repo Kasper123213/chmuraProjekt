@@ -2,115 +2,97 @@ const express = require('express');
 const multer = require('multer');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { BlobServiceClient } = require('@azure/storage-blob');
-const genai = require('@google/generative-ai'); 
+
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Konfiguracja multer do odbierania plików w pamięci
+// download
+const piexif = require("piexifjs");
+const JSZip = require("jszip");
+
+// Multer: store files in memory
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Azure Blob Storage setup
+// Azure Blob Storage
 const AZURE_STORAGE_CONNECTION_STRING = process.env.AZURE_STORAGE_CONNECTION_STRING;
 const containerName = "uploads";
 
 const blobServiceClient = BlobServiceClient.fromConnectionString(AZURE_STORAGE_CONNECTION_STRING);
 const containerClient = blobServiceClient.getContainerClient(containerName);
 
+// Google Generative AI - Updated to a current multimodal model (December 2025)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash",
-});
 
+// Use gemini-3-flash-preview (latest fast multimodal model) or fallback to gemini-2.5-flash if needed
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
+// Prompts (unchanged, but ensure ASCII compliance in output)
 const promptShort = `
-Otrzymasz 3 zdjęcia z kamer monitoringu mojej posesji.
+Otrzymasz 3 zdjecia z kamer monitoringu mojej posesji.
 
-Każde kolejne zdjęcie jest wykonane później:
-- Zdjęcie 1: kamera przy bramie
-- Zdjęcie 2: kamera na podjeździe
-- Zdjęcie 3: kamera przy drzwiach wejściowych
+Kazde kolejne zdjecie jest wykonane pozniej:
+- Zdjecie 1: kamera przy bramie
+- Zdjecie 2: kamera na podjezdzie
+- Zdjecie 3: kamera przy drzwiach wejsciowych
 
 Twoje zadanie:
-1. Przeanalizuj zdjęcia w kolejności chronologicznej.
-2. Napisz, co mogło się wydarzyć — jaka jest możliwa historia.
-3. Użyj tylko najważniejszych informacji widocznych na zdjęciach.
+1. Przelanalizuj zdjecia w kolejnosci chronologicznej.
+2. Napisz, co moglo sie wydarzyc — jaka jest mozliwa historia.
+3. Uzyj tylko najwazniejszych informacji widocznych na zdjeciach.
 4. Styl: neutralny, rzeczowy.
-5. Maksymalnie **150 znaków**.
-6. Używaj wyłącznie znaków ASCII bez nowych linii i Polskich znaków.
+5. Maksymalnie **150 znakow**.
+6. Nie uzywaj poslich znakow, uzywaj wylacznie znakow ASCII bez nowych linii.
 
-Zwróć odpowiedź TYLKO jako krótką historyjkę, bez punktów i bez komentarzy technicznych.
+Zwroc odpowiedz TYLKO jako krotka historyjke, bez punktow i bez komentarzy technicznych.
 `;
 
 const promptLong = `
-Masz trzy zdjęcia z kamer monitoringu na mojej posesji:
+Masz trzy zdjecia z kamer monitoringu na mojej posesji:
 
-- Zdjęcie 1: Kamera przy bramie
-- Zdjęcie 2: Kamera kilka metrów dalej na podjeździe
-- Zdjęcie 3: Kamera pod drzwiami wejściowymi
+- Zdjecie 1: Kamera przy bramie
+- Zdjecie 2: Kamera kilka metrow dalej na podjezdzie
+- Zdjecie 3: Kamera pod drzwiami wejsciowymi
 
-Każde zdjęcie pokazuje moment wykrycia ruchu. Opisz dokładnie, co mogło się wydarzyć między tymi trzema punktami. Uwzględnij kolejność ruchu osoby, możliwe intencje i działania. Nie zgaduj imion ani szczegółów prywatnych – skup się tylko na tym, co widać na obrazach. 
-Zwróć odpowiedź w formie krótkiego, logicznego opisu wydarzenia.
-Używaj wyłącznie znaków ASCII bez nowych linii i Polskich znaków.
+Kazde zdjecie pokazuje moment wykrycia ruchu. Opisz dokladnie, co moglo sie wydarzyc miedzy tymi trzema punktami. Uwzglednij kolejnosc ruchu osoby, mozliwe intencje i dzialania. Nie zgaduj imion ani szczegolow prywatnych – skup sie tylko na tym, co widac na obrazach. 
+Zwroc odpowiedz w formie krotkiego, logicznego opisu wydarzenia.
+Nie uzywaj polskich znakow, uzywaj wylacznie znakow ASCII bez nowych linii.
 `;
 
-
-// Funkcja do opisania obrazów przez Google AI
+// Function to describe images using Google Gemini
 async function describeImages(files, short) {
-  const inputs = [];
+  const imageParts = files.map(file => ({
+    inlineData: {
+      mimeType: file.mimetype,
+      data: file.buffer.toString("base64"),
+    },
+  }));
 
-  for (const file of files) {
-    inputs.push({
-      inlineData: {
-        mimeType: file.mimetype,
-        data: file.buffer.toString("base64"),
-      },
-    });
-  }
-  let prompt = '';
-  if (short){
-    prompt = promptShort;
-    } else{
-      prompt = promptLong;
-  }
-  try{
-    const result = await model.generateContent([
-      { text: prompt},
-      ...inputs
-    ]);
-  } catch (err){
-    console.error("\n\n\nGoogle AI error, retrying with OpenRouter...\n\n\n", err);
-    return describeImages2(files, short);
-  }
+  const prompt = short ? promptShort : promptLong;
 
-  return result.response.text();
+  // Content order: prompt first, then all 3 images
+  const content = [{ text: prompt }, ...imageParts];
+
+  const result = await model.generateContent(content);
+  return result.response.text().trim();
 }
 
+// Fallback to OpenRouter (kept as backup)
+async function describeImagesFallback(files, short) {
+  const inputs = files.map(file => ({
+    type: "image_url",
+    image_url: {
+      url: `data:${file.mimetype};base64,${file.buffer.toString("base64")}`
+    }
+  }));
 
-// Funkcja opisująca obrazy przez OpenRouter AI
-async function describeImages2(files, short) {
-  const inputs = [];
-
-  for (const file of files) {
-    inputs.push({
-      type: "input_image",
-      image: file.buffer.toString("base64"),
-      mime_type: file.mimetype,
-    });
-  }
-
-  let prompt = "";
-  if (short) {
-    prompt = promptShort;
-  } else {
-    prompt = promptLong;
-  }
+  const prompt = short ? promptShort : promptLong;
 
   const body = {
-    model: "openai/gpt-4o-mini", 
+    model: "google/gemini-flash-1.5", // or "google/gemini-pro-1.5" if available on OpenRouter
     messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: inputs }
+      { role: "system", content: "You are a helpful assistant that analyzes security camera images." },
+      { role: "user", content: [{ type: "text", text: prompt }, ...inputs] }
     ]
   };
 
@@ -118,163 +100,208 @@ async function describeImages2(files, short) {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "HTTP-Referer": "https://twoja-domena.com",
+      "HTTP-Referer": "https://your-domain.com", // Replace with your domain
       "X-Title": "MonitoringAI",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
   });
-  const data = await response.json();
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error("OpenRouter API error: " + errorText);
+    throw new Error(`OpenRouter error: ${response.status} - ${errorText}`);
   }
 
-  return data.choices[0].message.content;
+  const data = await response.json();
+  return data.choices[0].message.content.trim();
 }
-
 
 function sanitizeMetadata(value) {
   if (!value) return "";
-  // usuwa znaki nowej linii i powroty karetki
   let sanitized = value.replace(/[\r\n]+/g, " ");
-  // usuwa znaki nie-ASCII
   sanitized = sanitized.replace(/[^\x20-\x7E]/g, "");
-  return sanitized;
+  return sanitized.trim();
 }
 
-
-// Funkcja do uploadu plików do Azure z metadanymi
-async function uploadFilesToAzure(files, containerClient, aiDescriptions_short, aiDescriptions_long, batchID) {
-
+async function uploadFilesToAzure(files, containerClient, aiShort, aiLong, batchID) {
   const uploadedFiles = [];
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-
-    // Tworzymy unikalną nazwę pliku
-    const blobName = `${batchID}_${i}.jpg`;
+    const blobName = `${batchID}_${i + 1}.jpg`; // 1-based for clarity
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
 
-    // Metadane dla Azure Blob Storage
-    const metadata = i===2?{
-      batchID: batchID,
-      aiDescriptions_short: sanitizeMetadata(aiDescriptions_short),
-      aiDescriptions_long: sanitizeMetadata(aiDescriptions_long)
-    }:{
-      batchID: batchID
-    };
+    const metadata = (i === 2) ? {
+      batchID,
+      ai_short: sanitizeMetadata(aiShort),
+      ai_long: sanitizeMetadata(aiLong)
+    } : { batchID };
 
-    // Upload pliku JPG z metadanymi, bez JSON w treści
-    await blockBlobClient.upload(file.buffer, file.size, { metadata });
+    await blockBlobClient.uploadData(file.buffer, {
+      metadata,
+      blobHTTPHeaders: { blobContentType: file.mimetype }
+    });
 
     uploadedFiles.push({
       fileName: blobName,
-      url: blockBlobClient.url,
-      metadata
+      url: blockBlobClient.url
     });
   }
 
   return uploadedFiles;
 }
 
-
-
-
-// Test endpoint
+// Routes
 app.get('/', (req, res) => {
-  res.json({ message: "Hello Kasper" });
+  res.json({ message: "Hello Kasper - Server running" });
 });
 
-// Endpoint upload
 app.post('/api/upload', upload.array('files', 3), async (req, res) => {
-  let aiDescriptions_short = [], aiDescriptions_long = [];
-  const batchID = req.body.batchID || "unknown_batch";
+  const batchID = req.body.batchID || Date.now().toString();
+  let aiShort = "AI unavailable";
+  let aiLong = "AI unavailable";
+
   try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: "No files uploaded" });
+    if (!req.files || req.files.length !== 3) {
+      return res.status(400).json({ error: "Exactly 3 image files required" });
     }
 
-    // Opis zdjęć przez Google AI
-    aiDescriptions_short = await describeImages(req.files, true);
-    aiDescriptions_long = await describeImages(req.files, false);
+    // Try Gemini first
+    aiShort = await describeImages(req.files, true);
+    aiLong = await describeImages(req.files, false);
 
-    if (!aiDescriptions_short || !aiDescriptions_long) {
-      throw new Error("AI descriptions undefined");
-    }
   } catch (err) {
-    console.error("AI description error:", err);
-    aiDescriptions_short = ["AI unavailable"];
-    aiDescriptions_long = ["AI unavailable"];
+    console.error("Gemini AI error:", err.message);
+
+    // Fallback to OpenRouter
+    try {
+      aiShort = await describeImagesFallback(req.files, true);
+      aiLong = await describeImagesFallback(req.files, false);
+      console.log("Fallback to OpenRouter successful");
+    } catch (fallbackErr) {
+      console.error("OpenRouter fallback failed:", fallbackErr.message);
+      aiShort = aiLong = "AI unavailable";
+    }
   }
 
   try {
     const uploadedFiles = await uploadFilesToAzure(
       req.files,
       containerClient,
-      aiDescriptions_short,
-      aiDescriptions_long,
+      aiShort,
+      aiLong,
       batchID
     );
 
     res.json({
-      message: "Files uploaded",
-      files: uploadedFiles,
-      aiDescriptions_short,
-      aiDescriptions_long
+      message: "Upload and analysis complete",
+      batchID,
+      ai_short: aiShort,
+      ai_long: aiLong,
+      files: uploadedFiles
     });
 
   } catch (err) {
-    console.error("Upload error:", err);
-    res.status(500).json({ error: "Upload failed", details: err.message });
+    console.error("Azure upload error:", err);
+    res.status(500).json({ error: "Upload to Azure failed", details: err.message });
   }
 });
 
-
-// Pobranie wszystkich plików wraz z metadanymi
-async function getAllFilesWithMetadata(containerClient) {
-  const result = [];
-
-  for await (const blob of containerClient.listBlobsFlat()) {
-    try {
-      const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
-      
-      // Pobieramy właściwości blobu (metadata, contentType, size itp.)
-      const properties = await blockBlobClient.getProperties();
-
-      result.push({
-        fileName: blob.name,
-        url: blockBlobClient.url,
-        size: properties.contentLength,
-        contentType: properties.contentType,
-        metadata: properties.metadata
-      });
-
-    } catch (err) {
-      console.error("Błąd przy pobieraniu metadanych blobu:", blob.name, err);
-    }
-  }
-
-  return result;
-}
-
-// Endpoint
 app.get("/api/files", async (req, res) => {
   try {
-    const files = await getAllFilesWithMetadata(containerClient);
+    const files = [];
+    for await (const blob of containerClient.listBlobsFlat()) {
+      const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
+      const properties = await blockBlobClient.getProperties();
+
+      files.push({
+        fileName: blob.name,
+        url: blockBlobClient.url,
+        metadata: properties.metadata || {}
+      });
+    }
+
     res.json({ count: files.length, files });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error("List files error:", err);
+    res.status(500).json({ error: "Failed to list files" });
   }
 });
 
+/* ---------------- DOWNLOAD BATCH WITH EXIF ---------------- */
 
+app.get("/api/download/:batchID", async (req, res) => {
+  const { batchID } = req.params;
+  const zip = new JSZip();
 
+  try {
+    const blobs = [];
 
+    for await (const blob of containerClient.listBlobsFlat()) {
+      if (blob.name.startsWith(batchID + "_")) {
+        blobs.push(blob.name);
+      }
+    }
 
+    if (blobs.length === 0) {
+      return res.status(404).json({ error: "Batch not found" });
+    }
 
+    blobs.sort(); // chronological order
+
+    for (let i = 0; i < blobs.length; i++) {
+      const blobName = blobs[i];
+      const blockBlob = containerClient.getBlockBlobClient(blobName);
+
+      const props = await blockBlob.getProperties();
+      const metadata = props.metadata || {};
+
+      const imgRes = await fetch(blockBlob.url);
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+      let jpegData = buffer.toString("binary");
+
+      let exifObj = {};
+      try {
+        exifObj = piexif.load(jpegData);
+      } catch {
+        exifObj = { "0th": {}, Exif: {}, GPS: {}, Interop: {}, "1st": {} };
+      }
+
+      let description = "";
+
+      if (i === 0 && metadata.ai_long) {
+        description = metadata.ai_long;
+      }
+      if (i === blobs.length - 1 && metadata.ai_short) {
+        description = metadata.ai_short;
+      }
+
+      if (description) {
+        exifObj["0th"][piexif.ImageIFD.ImageDescription] =
+          description;
+      }
+
+      const exifBytes = piexif.dump(exifObj);
+      const newJpeg = piexif.insert(exifBytes, jpegData);
+
+      zip.file(blobName, Buffer.from(newJpeg, "binary"));
+    }
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=${batchID}.zip`
+    );
+
+    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.send(zipBuffer);
+
+  } catch (err) {
+    console.error("Download error:", err);
+    res.status(500).json({ error: "Download failed", details: err.message });
+  }
+});
 
 app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+  console.log(`Server running on http://localhost:${port}`);
 });

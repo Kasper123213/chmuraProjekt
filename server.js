@@ -29,12 +29,7 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // Prompts (unchanged, but ensure ASCII compliance in output)
 const promptShort = `
-Otrzymasz 3 zdjecia z kamer monitoringu mojej posesji.
-
-Kazde kolejne zdjecie jest wykonane pozniej:
-- Zdjecie 1: kamera przy bramie
-- Zdjecie 2: kamera na podjezdzie
-- Zdjecie 3: kamera przy drzwiach wejsciowych
+Otrzymasz 3 obrazy z kamer monitoringu, wykonane w roznych miejscach lub z roznych perspektyw.
 
 Twoje zadanie:
 1. Przelanalizuj zdjecia w kolejnosci chronologicznej.
@@ -48,14 +43,16 @@ Zwroc odpowiedz TYLKO jako krotka historyjke, bez punktow i bez komentarzy techn
 `;
 
 const promptLong = `
-Masz trzy zdjecia z kamer monitoringu na mojej posesji:
+Otrzymujesz 3 zdjecia wykonane w roznych miejscach lub z roznych perspektyw.
+Moga przedstawic rozne pomieszczenia, jeden obszar z kilku kamer
+albo rozne lokalizacje powiazane jednym zdarzeniem.
 
-- Zdjecie 1: Kamera przy bramie
-- Zdjecie 2: Kamera kilka metrow dalej na podjezdzie
-- Zdjecie 3: Kamera pod drzwiami wejsciowymi
+Kazde zdjecie pokazuje moment wykrycia ruchu. Opisz dokladnie, co moglo sie wydarzyc miedzy tymi trzema punktami.
+Przeanalizuj je lacznie i opisz logicznie przebieg zdarzenia.
+Nie zgaduj danych osobowych.
+Skup sie wylacznie na tym, co widac.
 
-Kazde zdjecie pokazuje moment wykrycia ruchu. Opisz dokladnie, co moglo sie wydarzyc miedzy tymi trzema punktami. Uwzglednij kolejnosc ruchu osoby, mozliwe intencje i dzialania. Nie zgaduj imion ani szczegolow prywatnych – skup sie tylko na tym, co widac na obrazach. 
-Zwroc odpowiedz w formie krotkiego, logicznego opisu wydarzenia.
+Zwroc odpowiedz w formie krotkiego, logicznego opisu wydarzenia. 
 Nie uzywaj polskich znakow, uzywaj wylacznie znakow ASCII bez nowych linii.
 `;
 
@@ -133,8 +130,8 @@ async function uploadFilesToAzure(files, containerClient, aiShort, aiLong, batch
 
     const metadata = (i === 2) ? {
       batchID,
-      ai_short: sanitizeMetadata(aiShort),
-      ai_long: sanitizeMetadata(aiLong)
+      ai_short: aiShort,
+      ai_long: aiLong
     } : { batchID };
 
     await blockBlobClient.uploadData(file.buffer, {
@@ -153,7 +150,7 @@ async function uploadFilesToAzure(files, containerClient, aiShort, aiLong, batch
 
 // Routes
 app.get('/', (req, res) => {
-  res.json({ message: "Hello Kasper - Server running" });
+  res.json({ message: "Server is running" });
 });
 
 app.post('/api/upload', upload.array('files', 3), async (req, res) => {

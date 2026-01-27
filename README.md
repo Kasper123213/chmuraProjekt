@@ -1,5 +1,8 @@
 # Trójkamerowy System Fotopułapkowy Zintegrowany z Chmurą
 
+Repozytorium:
+[Kod źródłowy backend/mobile/embedded](https://github.com/Kasper123213/chmuraProjekt)
+
 ## Konfiguracja Azure Blob Storage
 
 Po zalogowaniu się na konto studenckie:

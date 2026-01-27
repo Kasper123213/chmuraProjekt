@@ -1,26 +1,29 @@
 
 import requests
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Adres lokalnego serwera lub Azure
-url = "http://localhost:3000/api/upload"
-# url = "https://chmuraapp-gsc3fkf2d8dnamc2.polandcentral-01.azurewebsites.net/api/upload"
-
+url = os.getenv("URL")+"/api/upload"
 
 data = {
-    "batchID": "ID0019"
+    "batchID": "FinalTest"
 }
 # Ścieżki do plików
 file_paths = [
-    r"images/1_1.jpeg",
-    r"images/2_1.jpeg",
-    r"images/3_1.jpeg"
+    os.path.join(BASE_DIR, "images", "1.jpeg"),
+    os.path.join(BASE_DIR, "images", "2.jpeg"),
+    os.path.join(BASE_DIR, "images", "3.jpeg")
 ]
 
 # Przygotowanie form-data dla wielu plików
 files = [
-    ("files", (file_paths[0], open(file_paths[0], "rb"), "image/jpeg")),
-    ("files", (file_paths[1], open(file_paths[1], "rb"), "image/jpeg")),
-    ("files", (file_paths[2], open(file_paths[2], "rb"), "image/jpeg"))
+    ("files", (os.path.basename(p), open(p, "rb"), "image/jpeg"))
+    for p in file_paths
 ]
 
 # Wysłanie żądania POST
@@ -32,4 +35,5 @@ for _, (_, f, _) in files:
 
 # Wynik
 print("Status code:", response.status_code)
+print(response.text)
 print("Response JSON:", response.json())

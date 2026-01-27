@@ -10,7 +10,7 @@ IF EXIST %ZIP_NAME% (
 
 REM --- Tworzenie nowego zipa ---
 echo Tworzenie pliku %ZIP_NAME%
-REM Tutaj pakujemy pliki i katalogi (nie pakujemy node_modules)
+REM 
 powershell -Command "Compress-Archive -Path package.json,package-lock.json,server.js -DestinationPath %ZIP_NAME% -Force"
 
 echo Gotowe!

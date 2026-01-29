@@ -1,5 +1,7 @@
 # Trójkamerowy System Fotopułapkowy Zintegrowany z Chmurą
 
+Zespół wyraża zgodę na dalsze wykorzystywanie projektu w celach akademickich. 
+
 Repozytorium:
 [Kod źródłowy backend/mobile/embedded](https://github.com/Kasper123213/chmuraProjekt)
 

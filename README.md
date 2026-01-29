@@ -203,7 +203,7 @@ Przy problemach z budowaniem iOS sprawdź: [`ios/AzureBlobApp/Info.plist`](ios/A
 - Zwróć uwagę na klucze i hasła — w repo powinny nie być (np. bundle id w [`ios/AzureBlobApp/Info.plist`](ios/AzureBlobApp/Info.plist) jest ustawiony na zmienne projektu).
 - Jeśli chcesz zaktualizować React Native, przetestuj dokładnie natywne moduły i codegen.
 
-# Obsługa kamer - Raspberry Pi
+# Obsługa kamer - Raspberry Pi (motion-detection)
 
 Ta część projektu odpowiada za wykrywanie ruchu z trzech kamer na Raspberry Pi i wysyłaniu obrazu z nich przez API do Azure.
 
